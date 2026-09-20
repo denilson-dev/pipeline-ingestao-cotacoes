@@ -1,3 +1,4 @@
 # Exemplo: executar todos os dias às 06:00 no horário configurado no servidor.
-# Ajuste /opt/pipeline e o caminho do Python conforme o ambiente.
-0 6 * * * cd /opt/pipeline && /usr/bin/python3 ingestao.py >> /var/log/pipeline-ingestao.log 2>&1
+# Ajuste /opt/pipeline e o caminho do ambiente virtual conforme o ambiente.
+# O arquivo .env deve existir no diretório do projeto e ter permissão restrita (ex.: chmod 600 .env).
+0 6 * * * /bin/bash -lc 'cd /opt/pipeline && set -a && . ./.env && set +a && ./.venv/bin/python ingestao.py >> /var/log/pipeline-ingestao.log 2>&1'
