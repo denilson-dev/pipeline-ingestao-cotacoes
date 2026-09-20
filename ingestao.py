@@ -1,63 +1,149 @@
-import requests
-import psycopg2
-from datetime import datetime
+import logging
+import os
+import sys
+import time
+from datetime import datetime, timezone
 
-DB_CONFIG = {
-    "dbname": "analytics_db",
-    "user": "admin_dba",
-    "password": "SuaSenhaSegura123",
-    "host": "127.0.0.1",
-    "port": "5432"
-}
+import psycopg2
+import requests
+
+API_URL = os.getenv("EXCHANGE_API_URL", "https://api.exchangerate-api.com/v4/latest/USD")
+API_TIMEOUT_SECONDS = int(os.getenv("API_TIMEOUT_SECONDS", "5"))
+API_MAX_ATTEMPTS = int(os.getenv("API_MAX_ATTEMPTS", "3"))
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+def obter_configuracao_banco():
+    required = ["POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_HOST"]
+    missing = [name for name in required if not os.getenv(name)]
+
+    if missing:
+        raise RuntimeError(
+            "Variáveis de ambiente obrigatórias ausentes: " + ", ".join(missing)
+        )
+
+    return {
+        "dbname": os.environ["POSTGRES_DB"],
+        "user": os.environ["POSTGRES_USER"],
+        "password": os.environ["POSTGRES_PASSWORD"],
+        "host": os.environ["POSTGRES_HOST"],
+        "port": os.getenv("POSTGRES_PORT", "5432"),
+        "connect_timeout": 5,
+        "application_name": "pipeline-ingestao-cotacoes",
+    }
+
+
+def _validar_taxa(valor, nome):
+    if not isinstance(valor, (int, float)) or valor <= 0:
+        raise ValueError(f"Taxa inválida para {nome}: {valor!r}")
+    return float(valor)
+
 
 def obter_cotacoes():
-    # Tenta obter dados de uma API publica sem restricao agressiva
-    try:
-        url = "https://api.exchangerate-api.com/v4/latest/USD"
-        res = requests.get(url, timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            brl = data["rates"]["BRL"]
-            eur = data["rates"]["EUR"]
-            return [
-                {"moeda": "USD", "compra": brl, "venda": brl},
-                {"moeda": "EUR", "compra": brl / eur, "venda": brl / eur}
-            ]
-    except Exception as e:
-        print(f"Aviso: Falha na API principal ({e}). Usando dados de fallback.")
+    ultimo_erro = None
 
-    # Fallback automatico para simulação caso a API bloqueie o IP
-    return [
-        {"moeda": "USD", "compra": 5.65, "venda": 5.68},
-        {"moeda": "EUR", "compra": 6.15, "venda": 6.20},
-        {"moeda": "BTC", "compra": 345000.00, "venda": 346000.00}
-    ]
+    for tentativa in range(1, API_MAX_ATTEMPTS + 1):
+        try:
+            resposta = requests.get(API_URL, timeout=API_TIMEOUT_SECONDS)
+            resposta.raise_for_status()
+            payload = resposta.json()
+
+            rates = payload.get("rates", {})
+            brl_por_usd = _validar_taxa(rates.get("BRL"), "BRL")
+            eur_por_usd = _validar_taxa(rates.get("EUR"), "EUR")
+
+            brl_por_eur = brl_por_usd / eur_por_usd
+
+            return [
+                {"moeda": "USD", "compra": brl_por_usd, "venda": brl_por_usd},
+                {"moeda": "EUR", "compra": brl_por_eur, "venda": brl_por_eur},
+            ]
+        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+            ultimo_erro = exc
+            logger.warning(
+                "Falha ao obter cotações (tentativa %s/%s): %s",
+                tentativa,
+                API_MAX_ATTEMPTS,
+                exc,
+            )
+            if tentativa < API_MAX_ATTEMPTS:
+                time.sleep(min(tentativa * 2, 5))
+
+    raise RuntimeError(
+        "Não foi possível obter cotações válidas da API. "
+        "Nenhum dado será gravado no banco."
+    ) from ultimo_erro
+
+
+def persistir_cotacoes(cotacoes):
+    db_config = obter_configuracao_banco()
+    agora = datetime.now(timezone.utc)
+    data_referencia = agora.date()
+    inseridos = 0
+    ignorados = 0
+
+    with psycopg2.connect(**db_config) as conn:
+        with conn.cursor() as cursor:
+            for item in cotacoes:
+                cursor.execute(
+                    """
+                    INSERT INTO cotacoes_diarias
+                        (moeda, valor_compra, valor_venda, data_cotacao)
+                    SELECT %s, %s, %s, %s
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM cotacoes_diarias
+                        WHERE moeda = %s
+                          AND data_cotacao::date = %s
+                    )
+                    """,
+                    (
+                        item["moeda"],
+                        item["compra"],
+                        item["venda"],
+                        agora,
+                        item["moeda"],
+                        data_referencia,
+                    ),
+                )
+
+                if cursor.rowcount == 1:
+                    inseridos += 1
+                    logger.info(
+                        "Cotação %s inserida: R$ %.4f",
+                        item["moeda"],
+                        item["compra"],
+                    )
+                else:
+                    ignorados += 1
+                    logger.info(
+                        "Cotação %s já existente para %s; inserção ignorada.",
+                        item["moeda"],
+                        data_referencia,
+                    )
+
+    return inseridos, ignorados
+
 
 def rodar_pipeline():
+    logger.info("Iniciando pipeline de ingestão.")
     cotacoes = obter_cotacoes()
-    
-    conn = psycopg2.connect(**DB_CONFIG)
-    cursor = conn.cursor()
+    inseridos, ignorados = persistir_cotacoes(cotacoes)
+    logger.info(
+        "Pipeline concluído com sucesso. Inseridos=%s | Ignorados=%s",
+        inseridos,
+        ignorados,
+    )
 
-    registos = 0
-    agora = datetime.now()
-
-    for item in cotacoes:
-        cursor.execute(
-            """
-            INSERT INTO cotacoes_diarias (moeda, valor_compra, valor_venda, data_cotacao)
-            VALUES (%s, %s, %s, %s)
-            """,
-            (item["moeda"], item["compra"], item["venda"], agora)
-        )
-        registos += 1
-        print(f"-> Inserida cotação {item['moeda']}: R$ {item['compra']:.2f}")
-
-    conn.commit()
-    cursor.close()
-    conn.close()
-    
-    print(f"[{agora}] Sucesso! Registos inseridos no PostgreSQL: {registos}")
 
 if __name__ == "__main__":
-    rodar_pipeline()
+    try:
+        rodar_pipeline()
+    except Exception:
+        logger.exception("Pipeline finalizado com erro.")
+        sys.exit(1)
