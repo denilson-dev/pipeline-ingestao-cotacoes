@@ -2,7 +2,7 @@
 
 Pipeline de ingestão de cotações financeiras desenvolvido em Python, com PostgreSQL em Docker, execução em Linux/AWS EC2 e automação por cron.
 
-O projeto foi estruturado para ser simples, reproduzível e seguro para portfólio: credenciais não ficam no código, falhas da API não geram dados fictícios e a gravação diária é idempotente por moeda.
+Este projeto foi criado como parte do meu aprendizado prático em Engenharia de Dados, com foco em integrar diferentes tecnologias em uma pipeline simples, reproduzível e segura. As credenciais não ficam no código, falhas da API não geram dados fictícios e a gravação diária é idempotente por moeda.
 
 ## Arquitetura
 
@@ -177,7 +177,7 @@ O arquivo em `sql/init.sql` é executado automaticamente apenas quando o volume 
 
 Se já existir um banco/volume na EC2, revise os dados existentes antes de aplicar manualmente o novo índice de unicidade. Caso existam duas ou mais linhas da mesma moeda para o mesmo dia UTC, o índice não poderá ser criado até que essas duplicidades sejam tratadas.
 
-## Próximas evoluções
+## Próximos estudos
 
 - observabilidade com métricas e alertas;
 - armazenamento histórico em camada analítica;
@@ -188,4 +188,4 @@ Se já existir um banco/volume na EC2, revise os dados existentes antes de aplic
 
 ## Objetivo do projeto
 
-O objetivo é demonstrar, na prática, integração entre API externa, Python, PostgreSQL, Docker, Linux, automação, testes e infraestrutura em nuvem com foco em fundamentos de Engenharia de Dados.
+Registrar e compartilhar meu aprendizado prático em Engenharia de Dados, explorando a integração entre API externa, Python, PostgreSQL, Docker, Linux, automação, testes e infraestrutura em nuvem.
