@@ -59,6 +59,37 @@ jobs:
                AND table_name = 'cotacoes_diarias'
                AND column_name IN ('moeda', 'taxa_brl', 'data_referencia', 'data_ingestao');"             | grep -qx "data_ingestao,data_referencia,moeda,taxa_brl"
 
+      - name: Validar migracao do schema legado
+        run: |
+          docker compose exec -T postgres             createdb -U admin_dba migration_test
+
+          docker compose exec -T postgres             psql -U admin_dba -d migration_test -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE TABLE cotacoes_diarias (
+              id BIGSERIAL PRIMARY KEY,
+              moeda VARCHAR(10) NOT NULL,
+              valor_compra NUMERIC(18, 6) NOT NULL,
+              valor_venda NUMERIC(18, 6) NOT NULL,
+              data_cotacao TIMESTAMPTZ NOT NULL
+          );
+
+          INSERT INTO cotacoes_diarias
+              (moeda, valor_compra, valor_venda, data_cotacao)
+          VALUES
+              ('USD', 5.10, 5.10, '2026-09-20 10:00:00+00'),
+              ('USD', 5.20, 5.20, '2026-09-20 12:00:00+00'),
+              ('EUR', 6.00, 6.00, '2026-09-20 10:00:00+00'),
+              ('EUR', 6.10, 6.10, '2026-09-20 12:00:00+00');
+          SQL
+
+          docker compose exec -T postgres             psql -U admin_dba -d migration_test -v ON_ERROR_STOP=1             < sql/migrations/002_normalize_cotacoes.sql
+
+          docker compose exec -T postgres             psql -U admin_dba -d migration_test -Atc             "SELECT COUNT(*) FROM cotacoes_diarias_legacy;"             | grep -qx "4"
+
+          docker compose exec -T postgres             psql -U admin_dba -d migration_test -Atc             "SELECT COUNT(*) FROM cotacoes_diarias;"             | grep -qx "2"
+
+          docker compose exec -T postgres             psql -U admin_dba -d migration_test -Atc             "SELECT taxa_brl FROM cotacoes_diarias
+             WHERE moeda = 'USD' AND data_referencia = DATE '2026-09-20';"             | grep -qx "5.200000"
+
       - name: Encerrar containers
         if: always()
         run: docker compose down -v
