@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["main", "chore/harden-pipeline"]
+    branches: ["main"]
   pull_request:
     branches: ["main"]
 
@@ -39,3 +39,26 @@ jobs:
         run: |
           cp .env.example .env
           docker compose config >/dev/null
+
+      - name: Smoke test do PostgreSQL
+        run: |
+          docker compose up -d postgres
+
+          for tentativa in {1..20}; do
+            if docker compose exec -T postgres pg_isready -U admin_dba -d analytics_db; then
+              break
+            fi
+            sleep 2
+          done
+
+          docker compose exec -T postgres             psql -U admin_dba -d analytics_db -Atc             "SELECT to_regclass('public.cotacoes_diarias') IS NOT NULL;"             | grep -qx t
+
+          docker compose exec -T postgres             psql -U admin_dba -d analytics_db -Atc             "SELECT string_agg(column_name, ',' ORDER BY column_name)
+             FROM information_schema.columns
+             WHERE table_schema = 'public'
+               AND table_name = 'cotacoes_diarias'
+               AND column_name IN ('moeda', 'taxa_brl', 'data_referencia', 'data_ingestao');"             | grep -qx "data_ingestao,data_referencia,moeda,taxa_brl"
+
+      - name: Encerrar containers
+        if: always()
+        run: docker compose down -v
