@@ -1,16 +1,13 @@
 CREATE TABLE IF NOT EXISTS cotacoes_diarias (
     id BIGSERIAL PRIMARY KEY,
-    moeda VARCHAR(10) NOT NULL,
-    valor_compra NUMERIC(18, 6) NOT NULL CHECK (valor_compra > 0),
-    valor_venda NUMERIC(18, 6) NOT NULL CHECK (valor_venda > 0),
-    data_cotacao TIMESTAMPTZ NOT NULL
+    moeda VARCHAR(3) NOT NULL,
+    taxa_brl NUMERIC(18, 6) NOT NULL CHECK (taxa_brl > 0),
+    data_referencia DATE NOT NULL,
+    data_ingestao TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_cotacoes_diarias_moeda_data
+        UNIQUE (moeda, data_referencia)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_cotacoes_diarias_moeda_dia_utc
-    ON cotacoes_diarias (
-        moeda,
-        ((data_cotacao AT TIME ZONE 'UTC')::date)
-    );
-
 CREATE INDEX IF NOT EXISTS idx_cotacoes_diarias_moeda_data
-    ON cotacoes_diarias (moeda, data_cotacao DESC);
+    ON cotacoes_diarias (moeda, data_referencia DESC);
