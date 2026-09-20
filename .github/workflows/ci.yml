@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "chore/harden-pipeline"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements-dev.txt
+
+      - name: Validar sintaxe
+        run: python -m compileall -q ingestao.py tests
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Testes
+        run: python -m pytest -q
+
+      - name: Validar Docker Compose
+        run: |
+          cp .env.example .env
+          docker compose config >/dev/null
