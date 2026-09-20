@@ -1,0 +1,3 @@
+# Exemplo: executar todos os dias às 06:00 no horário configurado no servidor.
+# Ajuste /opt/pipeline e o caminho do Python conforme o ambiente.
+0 6 * * * cd /opt/pipeline && /usr/bin/python3 ingestao.py >> /var/log/pipeline-ingestao.log 2>&1
