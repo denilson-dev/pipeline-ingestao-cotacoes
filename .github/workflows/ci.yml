@@ -33,7 +33,7 @@ jobs:
         run: ruff check .
 
       - name: Testes
-        run: pytest -q
+        run: python -m pytest -q
 
       - name: Validar Docker Compose
         run: |
