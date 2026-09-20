@@ -56,7 +56,6 @@ def obter_cotacoes():
             rates = payload.get("rates", {})
             brl_por_usd = _validar_taxa(rates.get("BRL"), "BRL")
             eur_por_usd = _validar_taxa(rates.get("EUR"), "EUR")
-
             brl_por_eur = brl_por_usd / eur_por_usd
 
             return [
@@ -83,7 +82,6 @@ def obter_cotacoes():
 def persistir_cotacoes(cotacoes):
     db_config = obter_configuracao_banco()
     agora = datetime.now(timezone.utc)
-    data_referencia = agora.date()
     inseridos = 0
     ignorados = 0
 
@@ -94,21 +92,14 @@ def persistir_cotacoes(cotacoes):
                     """
                     INSERT INTO cotacoes_diarias
                         (moeda, valor_compra, valor_venda, data_cotacao)
-                    SELECT %s, %s, %s, %s
-                    WHERE NOT EXISTS (
-                        SELECT 1
-                        FROM cotacoes_diarias
-                        WHERE moeda = %s
-                          AND data_cotacao::date = %s
-                    )
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
                     """,
                     (
                         item["moeda"],
                         item["compra"],
                         item["venda"],
                         agora,
-                        item["moeda"],
-                        data_referencia,
                     ),
                 )
 
@@ -122,9 +113,8 @@ def persistir_cotacoes(cotacoes):
                 else:
                     ignorados += 1
                     logger.info(
-                        "Cotação %s já existente para %s; inserção ignorada.",
+                        "Cotação %s já existente para a data UTC atual; inserção ignorada.",
                         item["moeda"],
-                        data_referencia,
                     )
 
     return inseridos, ignorados
