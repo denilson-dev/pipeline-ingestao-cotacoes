@@ -6,5 +6,11 @@ CREATE TABLE IF NOT EXISTS cotacoes_diarias (
     data_cotacao TIMESTAMPTZ NOT NULL
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cotacoes_diarias_moeda_dia_utc
+    ON cotacoes_diarias (
+        moeda,
+        ((data_cotacao AT TIME ZONE 'UTC')::date)
+    );
+
 CREATE INDEX IF NOT EXISTS idx_cotacoes_diarias_moeda_data
     ON cotacoes_diarias (moeda, data_cotacao DESC);
