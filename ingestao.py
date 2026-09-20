@@ -2,7 +2,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import psycopg2
 import requests
@@ -44,6 +44,21 @@ def _validar_taxa(valor, nome):
     return float(valor)
 
 
+def _obter_data_referencia(payload):
+    data_api = payload.get("date")
+    if data_api:
+        try:
+            return date.fromisoformat(data_api)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Data inválida retornada pela API: {data_api!r}") from exc
+
+    timestamp_api = payload.get("time_last_updated")
+    if isinstance(timestamp_api, (int, float)) and timestamp_api > 0:
+        return datetime.fromtimestamp(timestamp_api, tz=timezone.utc).date()
+
+    raise ValueError("A API não retornou uma data de referência válida.")
+
+
 def obter_cotacoes():
     ultimo_erro = None
 
@@ -57,10 +72,19 @@ def obter_cotacoes():
             brl_por_usd = _validar_taxa(rates.get("BRL"), "BRL")
             eur_por_usd = _validar_taxa(rates.get("EUR"), "EUR")
             brl_por_eur = brl_por_usd / eur_por_usd
+            data_referencia = _obter_data_referencia(payload)
 
             return [
-                {"moeda": "USD", "compra": brl_por_usd, "venda": brl_por_usd},
-                {"moeda": "EUR", "compra": brl_por_eur, "venda": brl_por_eur},
+                {
+                    "moeda": "USD",
+                    "taxa_brl": brl_por_usd,
+                    "data_referencia": data_referencia,
+                },
+                {
+                    "moeda": "EUR",
+                    "taxa_brl": brl_por_eur,
+                    "data_referencia": data_referencia,
+                },
             ]
         except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
             ultimo_erro = exc
@@ -81,9 +105,9 @@ def obter_cotacoes():
 
 def persistir_cotacoes(cotacoes):
     db_config = obter_configuracao_banco()
-    agora = datetime.now(timezone.utc)
+    data_ingestao = datetime.now(timezone.utc)
     inseridos = 0
-    ignorados = 0
+    atualizados = 0
 
     with psycopg2.connect(**db_config) as conn:
         with conn.cursor() as cursor:
@@ -91,43 +115,49 @@ def persistir_cotacoes(cotacoes):
                 cursor.execute(
                     """
                     INSERT INTO cotacoes_diarias
-                        (moeda, valor_compra, valor_venda, data_cotacao)
+                        (moeda, taxa_brl, data_referencia, data_ingestao)
                     VALUES (%s, %s, %s, %s)
-                    ON CONFLICT DO NOTHING
+                    ON CONFLICT (moeda, data_referencia)
+                    DO UPDATE SET
+                        taxa_brl = EXCLUDED.taxa_brl,
+                        data_ingestao = EXCLUDED.data_ingestao
+                    RETURNING (xmax = 0) AS inserido
                     """,
                     (
                         item["moeda"],
-                        item["compra"],
-                        item["venda"],
-                        agora,
+                        item["taxa_brl"],
+                        item["data_referencia"],
+                        data_ingestao,
                     ),
                 )
 
-                if cursor.rowcount == 1:
+                inserido = cursor.fetchone()[0]
+                if inserido:
                     inseridos += 1
-                    logger.info(
-                        "Cotação %s inserida: R$ %.4f",
-                        item["moeda"],
-                        item["compra"],
-                    )
+                    acao = "inserida"
                 else:
-                    ignorados += 1
-                    logger.info(
-                        "Cotação %s já existente para a data UTC atual; inserção ignorada.",
-                        item["moeda"],
-                    )
+                    atualizados += 1
+                    acao = "atualizada"
 
-    return inseridos, ignorados
+                logger.info(
+                    "Cotação %s %s: R$ %.4f | referência=%s",
+                    item["moeda"],
+                    acao,
+                    item["taxa_brl"],
+                    item["data_referencia"],
+                )
+
+    return inseridos, atualizados
 
 
 def rodar_pipeline():
     logger.info("Iniciando pipeline de ingestão.")
     cotacoes = obter_cotacoes()
-    inseridos, ignorados = persistir_cotacoes(cotacoes)
+    inseridos, atualizados = persistir_cotacoes(cotacoes)
     logger.info(
-        "Pipeline concluído com sucesso. Inseridos=%s | Ignorados=%s",
+        "Pipeline concluído com sucesso. Inseridos=%s | Atualizados=%s",
         inseridos,
-        ignorados,
+        atualizados,
     )
 
 
